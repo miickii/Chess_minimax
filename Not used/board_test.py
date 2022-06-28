@@ -244,6 +244,7 @@ class Board():
             if new_piece != None: # If the piece is None, that means that promotion piece is a pawn, and in that case we don't need to change the piece
                 new_piece = self.promotion_pawn.promote_pawn(new_piece)
                 self.pieces_on_board.remove(self.promotion_pawn) # Remove pawn from pieces
+                self.pieces_on_board.append(new_piece)
 
                 if self.player_turn == WHITE:
                     self.white_pieces_on_board.append(new_piece)
@@ -299,7 +300,6 @@ class Board():
         self.check = False
         self.checking_pieces = []
         # CODE FOR MOVING THE PIECE
-        #print("moved piece: ", piece)
         curr_row, curr_col = piece_obj.get_pos()
         new_row, new_col = new_square
 
@@ -361,10 +361,6 @@ class Board():
         legal_moves_count = len(self.legal_moves)
 
         self.switch_turn()
-        for row in range(self.rows):
-            print(self.grid_2[row])
-        print("")
-        print("")
         return self.grid_2
 
     def evaluate_board(self):
@@ -440,6 +436,37 @@ class Board():
         # Now we can finally make the move on board
         self.move_piece(piece, square)
     
+    # Previous functions to calculate checkmate
+    def calculate_checkmate(self):
+        self.checked_king = self.white_king if self.player_turn == BLACK else self.black_king # Color of player that made current move caused check
+        total_legal_moves = 0
+
+        for piece in self.pieces_on_board:
+            if piece.color == self.checked_king.color:
+                # If it's of the pieces from the player in check
+                moves = self.legal_moves_in_check(piece)
+                total_legal_moves += len(moves)
+                piece.available_moves = moves
+        
+        if total_legal_moves == 0:
+            print("CHECKMATE!")
+            self.result = self.checkmate
+            self.handle_game_finished()
+    
+    def legal_moves_in_check(self, piece):
+        moves = []
+        for checking_piece in self.checking_pieces:
+            # Looping through all the pieces that are giving check
+            for move in piece.available_moves:
+                # Looping through each move of a given piece from player in check to check if it can stop it
+                if move == checking_piece.get_pos():
+                    moves.append(move)
+                else:
+                    still_check = self.hypothetic_move(piece, [checking_piece], move, self.checked_king)
+                    if not still_check:
+                        moves.append(move)
+        return moves
+    
     def copy(self):
         copy = []
 
@@ -494,6 +521,83 @@ class Board():
             
             if piece.check:
                 self.check = True
+
+    def copy(self, with_captured=False):
+        copy = [] # index 0 = grid
+        grid_copy = []
+        for row in range(self.rows):
+            grid_copy.append([])
+            for col in range(self.cols):
+                piece = self.grid[row][col]
+                # We will also pass a copy of the state of that piece
+                piece_copy = piece.copy_curr_state() if piece != None else None
+                grid_copy[row].append((piece, piece_copy))
+
+        copy.append(grid_copy)
+        copy.append(self.black_player.score)
+        copy.append(self.white_player.score)
+        # We copy the pieces on board by getting their positions from grid
+        #for piece in self.pieces_on_board
+        #copy.append(self.pieces_on_board.copy())
+        copy.append(self.player_turn)
+        copy.append(self.next_player)
+        if with_captured:
+            copy.append(self.white_captured.copy())
+            copy.append(self.black_captured.copy())
+
+        return copy
+
+    def revert_from_copy(self, copy, with_captured=False):
+        grid = copy[0]
+        for row in range(self.rows):
+            for col in range(self.cols):
+                # We check if the piece is at the same position as before, if not we put it there
+                curr_piece = self.grid[row][col]
+                prev_piece = grid[row][col][0] # Index 0 is the Piece object
+                if curr_piece != prev_piece:
+                    self.grid[row][col] = prev_piece
+
+                # We also have to move the piece's physical position by using set_pos() which just moves the piece and doesn't calculate other stuff like move_piece()
+                # Since the previous piece has moved, that is the one we want to set position of
+                if prev_piece != None:
+                    # We only want to change the position if there actually was a piece at the square
+                    prev_piece.revert_from_copy(grid[row][col][1]) # Index 1 is the copy of the piece state
+        #self.grid = copy[0]
+        self.black_player.score = copy[1]
+        self.white_player.score = copy[2]
+
+        # Set all pieces in pieces_on_board to the pieces from the copy
+        white_pieces_on_board_copy = copy[3]
+        for i, piece in enumerate(white_pieces_on_board_copy):
+            if i < len(self.white_pieces_on_board):
+                if self.white_pieces_on_board[i] != piece:
+                    self.white_pieces_on_board[i] = piece
+            else:
+                # Meaning that a piece was delted from the current white_pieces_on_board
+                # We have to readd that piece
+                self.white_pieces_on_board.append(piece)
+        
+        black_pieces_on_board_copy = copy[4]
+        for i, piece in enumerate(black_pieces_on_board_copy):
+            if i < len(self.black_pieces_on_board):
+                if self.black_pieces_on_board[i] != piece:
+                    self.black_pieces_on_board[i] = piece
+            else:
+                # Meaning that a piece was delted from the current white_pieces_on_board
+                # We have to readd that piece
+                self.black_pieces_on_board.append(piece)
+        
+        pieces_on_board_copy = copy[3]
+        self.pieces_on_board.clear()
+        for piece in pieces_on_board_copy:
+            self.pieces_on_board.append(piece)
+
+        self.player_turn = copy[3]
+        self.next_player = copy[4]
+        if with_captured:
+            self.white_captured = copy[5]
+            self.black_captured = copy[6]
+
 
     def hypothetic_move_2(self, move_piece, check_pieces, new_square):
         # Check pieces is an array of pieces for which we want to check if they give check after the move is made

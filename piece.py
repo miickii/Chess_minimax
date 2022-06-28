@@ -93,16 +93,14 @@ class Piece():
         self.row = pos[0]
         self.col = pos[1]
     
+    def curr_state(self):
+        state = [self.get_pos(), self.first]
+        return state
+    
     def copy_curr_state(self):
         copy = [] # Index 0 = img size, 1 = available_moves, 2 = position, 3 = promoted or en passant move state, 4 = pawn first move
-        copy.append(self.available_moves.copy())
         copy.append(self.get_pos())
         copy.append(self.first_move)
-        if self.type == PAWN:
-            copy.append(self.promote) # Wether or not the pawn was promoted
-        elif self.type == ENPASSANT:
-            copy.append(self.move) # The current state of an en passant pawn
-            copy.append(self.killed)
         
         return copy
     
@@ -110,15 +108,8 @@ class Piece():
         if self.img:
             self.set_default_size()
 
-        self.available_moves = copy[0]
-        self.set_pos(copy[1])
-        self.first_move = copy[2]
-
-        if self.type == PAWN:
-            self.promote = copy[3]
-        elif self.type == ENPASSANT:
-            self.move = copy[3]
-            self.killed = copy[4]
+        self.set_pos(copy[0])
+        self.first_move = copy[1]
     
      # Finds the start and end squares that make up the diagonals the bishop moves on
     def calculate_diag_edges(self):
@@ -168,16 +159,14 @@ class Piece():
         return start_square_right_diag, end_square_right_diag, start_square_left_diag, end_square_left_diag
 
     # ALSO UPDATES THREATHENING VARIABLE
-    def check_moves_diag(self, start_square, end_square, left_diag=False):
+    def check_moves_diag(self, start_square, end_square, left_diag=False, add_to_available_moves=False):
         # By default this function will check squares on the right_diag
         row_inc = -1
         col_inc = 1
         if left_diag:
             # We are checking the diag from top left --> bottom right
-            # Therefore we will increment curr_row by 1 and also increment curr_col by 1 in the for loop
+            # Therefore we will increment curr_row by 1 but curr_col still remains the same since we are going from left to right
             row_inc = 1
-            col_inc = 1
-
 
         # Now we will loop through all the right diag squares
         available_diag = []
@@ -233,6 +222,58 @@ class Piece():
                 self.add_threathening(threathening_left)
         
         return available_diag
+    
+    # ALSO UPDATES THREATHENING VARIABLE
+    def update_diag_moves(self, add_to_available_moves, left_diag=False):
+        # This function works by going out one direction until a piece is found or border is reached, then changes direction and checks the opposite way
+        # By default this function will check squares on the right_diag
+        row_inc = -1
+        col_inc = 1
+        if left_diag:
+            # We are checking the diag from top left --> bottom right
+            # Therefore we will increment curr_row by 1 but curr_col still remains the same since we are going from left to right
+            row_inc = 1
+
+        curr_row, curr_col = self.row + row_inc, self.col + col_inc
+
+        direction = 0 # At 1 we will switch direction, at 2 we have checked both directions and will exit the loop
+        while True:
+            if self.valid_move(curr_row, curr_col):
+                piece = self.board[curr_row][curr_col]
+
+                if piece and piece.color == self.color:
+                    if piece.color == self.color:
+                        # We want to check the other direction now and not add this move as it is the players own piece
+                        direction += 1
+                else:
+                    # If the piece is not one of player's pieces, it will either be an enemy piece, en passant piece, or no piece at all.
+                    # In all these cases we will add the move to available moves
+                    if add_to_available_moves:
+                        self.available_moves.append((curr_row, curr_col))
+                    else:
+                        self.possible_moves.append((curr_row, curr_col))
+                    
+                    if piece and piece.color != self.color and piece.type != ENPASSANT:
+                        # If there is a piece and the piece is an enemy piece, we will add it to threathening
+                        self.add_threathening(piece) # This function also checks if the piece is the enemy king
+                        direction += 1 # If there is an enemy piece we will also switch direction
+            else:
+                # If the move is not a valid move on the board we will also switch direction
+                direction += 1
+                # The only cases in which we dont switch is if there is no piece or it is an en passant pawn
+
+            if direction == 1:
+                direction = -2
+                row_inc *= -1
+                col_inc *= -1
+                curr_row = self.row
+                curr_col = self.col
+
+            curr_row += row_inc
+            curr_col += col_inc
+                
+            if direction == -1:
+                break # Both directions have been checked
     
     # ALSO UPDATES THREATHENING VARIABLE
     def check_moves_straight(self):
@@ -314,6 +355,59 @@ class Piece():
         
         return available_horizontal + available_vertical
     
+    # ALSO UPDATES THREATHENING VARIABLE
+    def update_straight_moves(self, add_to_available_moves):
+        # Works in the same way as update_diag_moves()
+
+        # In the first loop of 2 we increase the col which checks all the horizontal squares
+        # In the second loop we increase row which checks all the vertical squares
+        row_inc, col_inc = 0, 1
+
+        for i in range(2): 
+            curr_row, curr_col = self.row + row_inc, self.col + col_inc
+            direction = 0 # At 1 we will switch direction, at 2 we have checked both directions and will exit the loop
+            while True:
+                if self.valid_move(curr_row, curr_col):
+                    piece = self.board[curr_row][curr_col]
+
+                    if piece and piece.color == self.color:
+                        if piece.color == self.color:
+                            # We want to check the other direction now and not add this move as it is the players own piece
+                            direction += 1
+                    else:
+                        # If the piece is not one of player's pieces, it will either be an enemy piece, en passant piece, or no piece at all.
+                        # In all these cases we will add the move to available moves
+                        if add_to_available_moves:
+                            self.available_moves.append((curr_row, curr_col))
+                        else:
+                            self.possible_moves.append((curr_row, curr_col))
+                        
+                        if piece and piece.color != self.color and piece.type != ENPASSANT:
+                            # If there is a piece and the piece is an enemy piece, we will add it to threathening
+                            self.add_threathening(piece) # This function also checks if the piece is the enemy king
+                            direction += 1 # If there is an enemy piece we will also switch direction
+                else:
+                    # If the move is not a valid move on the board we will also switch direction
+                    direction += 1
+                    # The only cases in which we dont switch is if there is no piece or it is an en passant pawn
+
+                if direction == 1:
+                    direction = -2
+                    row_inc *= -1
+                    col_inc *= -1
+                    curr_row = self.row
+                    curr_col = self.col
+
+                curr_row += row_inc # row_inc will always be 0 when checking horizontal squares
+                curr_col += col_inc # col_inc will always be 0 when checking vertical squares
+                    
+                if direction == -1:
+                    break # Both directions have been checked
+            
+            # Now after the first loop we switch from checking horizontal squares to vertical squares
+            row_inc = 1
+            col_inc = 0
+    
     def is_threathening(self, square):
         for move in self.available_moves:
             if move == square:
@@ -325,6 +419,7 @@ class Piece():
         if piece.type == KING:
             self.check = True
     
+    # TEST THIS, IF KING IS INFRONT OF PAWN, THE PAWN PIECE WILL HAVE self.check = True
     def add_available_move(self, move):
         self.available_moves.append(move)
         if self.board[move[0]][move[1]] != None and self.board[move[0]][move[1]].type == KING:
@@ -334,6 +429,7 @@ class Piece():
         # Gets overritten by every inherited class
         pass
     
+    # This function will also check if one of the piece's moves is giving check to enemy king
     def update_and_add_available_moves(self):
         self.update_available_moves() # Sets all possible moves variable
         for move in self.possible_moves:
@@ -348,132 +444,4 @@ class Piece():
         self.available_moves = []
         self.threathening = []
         self.check = False
-    
-    def check_moves_diag_2(self, start_square, end_square, board=None, left_diag=False):
-        # By default this function will check squares on the right_diag
-        row_inc = -1
-        col_inc = 1
-        if left_diag:
-            # We are checking the diag from top left --> bottom right
-            # Therefore we will increment curr_row by 1 and also increment curr_col by 1 in the for loop
-            row_inc = 1
-            col_inc = 1
-
-
-        # Now we will loop through all the right diag squares
-        available_diag = []
-        min_diag = 0
-        max_diag = 7
-
-        curr_row, curr_col = start_square
-        for col in range(start_square[1], end_square[1]+1):
-            piece = board[curr_row][curr_col]
-
-            if curr_col != self.col:
-                # Only add the square if it is not the current position of the bishop
-                available_diag.append((curr_row, curr_col))
-            if piece != None and abs(piece) != ENPASSANT:
-                piece_color = WHITE if piece > 0 else BLACK
-                # If there is a piece at this square
-                if curr_col < self.col:
-                    # If the piece is to the left of this bishop we will set the right_diag_min to this square, as it's temporarily the best guess
-                    min_diag = (curr_row, curr_col)
-
-                    # If we encounter a piece closer to the rook, we will also reset the available moves up until now
-                    # Because we are in this if statement, it means that we have encountered a piece to the left of the bishop on this diag that is closer than the other one
-                    # Therefore we want to reset the available moves added up until now
-                    available_diag = []
-                    # However we will add this current position to available moves if it's one of opponents pieces, as it will be a capturing move
-                    if piece_color != self.color:
-                        if abs(piece) == KING:
-                            self.check = True
-                        available_diag.append((curr_row, curr_col))
-                elif curr_col > self.col:
-                    # This if statement is executed if the piece is to the right of the bishop
-                    # If a piece is encountered here, we want to set that square as the limit, since it's the first piece to the right of the bishop
-                    max_diag = (curr_row, curr_col)
-
-                    # Check to see if this piece is the opponents piece
-                    if piece_color == self.color:
-                        available_diag.pop()
-                    elif abs(piece) == KING:
-                        self.check = True
-                    break # It's important that we break since the first piece encountered to the right, will be the limit as to where the bishop can move
-
-            # At the end of the for loop we will go to the next square on diag
-            curr_row += row_inc
-            curr_col += col_inc
-        
-        return available_diag
-
-    def check_moves_straight_2(self, board=None):
-        min_horizontal = 0
-        max_horizontal = 7
-        available_horizontal = []
-        min_vertical = 0
-        max_vertical = 7
-        available_vertical = []
-
-        # Check horizontal direction
-        for col, piece in enumerate(board[self.row]):
-            if col != self.col:
-                # Only add position if it is not the current position of the rook
-                available_horizontal.append((self.row, col))
-            
-            if piece != None:
-                piece_type = abs(piece)
-                if piece_type == ENPASSANT:
-                    continue
-                piece_color = WHITE if piece > 0 else BLACK
-                if col < self.col:
-                    # If there is a piece we will set that as the new min_horizontal, as we can't go past that piece
-                    min_horizontal = col
-
-                    # If we encounter a piece closer to the rook, we will also reset the available moves up until now
-                    available_horizontal = []
-                    # However we will add this current position to available moves if it's one of opponents pieces, as it will be a capturing move
-                    if piece_color != self.color:
-                        if abs(piece) == KING:
-                            self.check = True
-                        available_horizontal.append((self.row, col))
-                elif col > self.col:
-                    # If col is greater than the column where this rook is, then it's the new max_horizontal
-                    max_horizontal = col
-
-                    # Check to see if this piece is the opponents piece
-                    if piece_color == self.color:
-                        available_horizontal.pop()
-                    elif abs(piece) == KING:
-                        self.check = True
-                    break # It's important that we break since the first piece encountered to the right, will be the limit as to where the rook can move
-        
-        # Check vertical direction
-        for row in range(8):
-            piece = board[row][self.col] # This will check all the pieces on the vertical line of the rook
-           
-            
-            if row != self.row:
-                # Only add position if it is not the current position of the rook
-                available_vertical.append((row, self.col))
-            if piece != None:
-                piece_color = WHITE if piece > 0 else BLACK
-                if row < self.row:
-                    min_vertical = row # This will update the vertical move for the rook until it encounters the closest piece to the rook
-
-                    available_vertical = []
-                    # However we will add this current position to available moves if it's one of opponents pieces, as it will be a capturing move
-                    if piece_color != self.color:
-                        if abs(piece) == KING:
-                            self.check = True
-                        available_vertical.append((row, self.col))
-                elif row > self.row:
-                    max_vertical = row
-
-                    if piece_color == self.color:
-                        available_vertical.pop()
-                    elif abs(piece) == KING:
-                        self.check = True
-                    break
-        
-        return available_horizontal + available_vertical
         

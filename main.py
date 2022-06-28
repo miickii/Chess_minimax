@@ -35,14 +35,18 @@ class Game():
         self.board_x, self.board_y = 0, (self.height - self.board_height) / 2
         self.board = Board(self.win, (self.board_x, self.board_y), (self.board_width, self.board_height), NORMAL)
 
-        self.player_white = Player(WHITE, self.board, ai=True, ai_level=3)
-        self.player_black = Player(BLACK, self.board, ai=True, ai_level=3)
+        self.player_white = Player(WHITE, self.board, ai=True, ai_level=3, depth=3)
+        self.player_black = Player(BLACK, self.board, ai=False, ai_level=3, depth=3)
         self.board.white_player = self.player_white
         self.board.black_player = self.player_black
 
         self.mouse_clicked = False
         self.mouse_pos = None
         self.dots = []
+
+        self.game_start_sound = pygame.mixer.Sound("assets/sound/game_start.wav")
+        pygame.mixer.Sound.play(self.game_start_sound)
+        pygame.mixer.music.stop()
     
     def run(self):
         while True:
@@ -74,6 +78,9 @@ class Game():
 
                 if (pos[0] >= self.board_x and pos[0] <= self.board_x + self.board_width) and (pos[1] >= self.board_y and pos[1] <= self.board_y + self.board_height):
                     self.mouse_clicked = True
+            elif event.type == pygame.KEYDOWN:
+                if event.key == pygame.K_SPACE:
+                    self.board.pop()
     
     def update(self):
         curr_player = self.board.player_turn
@@ -90,7 +97,6 @@ class Game():
                     self.board.random_move()'''
             elif (self.player_black.ai == True and curr_player == BLACK):
                 self.player_black.make_move()
-                pygame.time.delay(50)
             elif (self.player_white.ai == True and curr_player == WHITE):
                 self.player_white.make_move()
                 pygame.time.delay(50)
@@ -127,7 +133,6 @@ class Game():
                     m.pop(-1)
                 if m[0] == '':
                     m.pop(0)
-                print(m)
                 moves.append(m)
         
         return moves

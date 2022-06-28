@@ -1,4 +1,4 @@
-WHITE, BLACK = 0, 1
+WHITE, BLACK = 1, -1
 
 # COLORS
 C_BLACK = (0, 0, 0)

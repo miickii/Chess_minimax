@@ -1,6 +1,7 @@
 from piece import Piece
 import pygame
 import random
+from utils import *
 from box import Box
 from king import King
 from rook import Rook
@@ -51,6 +52,12 @@ class Board():
         self.piece_img_size = (41, 82) # Hard coded but easy to find
         self.grey_overlay = pygame.Surface((self.width, self.height), pygame.SRCALPHA)
         self.grey_overlay.fill(C_GREY_TRANSPARENT)
+
+        # SOUNDS
+        self.move_sound = pygame.mixer.Sound("assets/sound/move.wav")
+        self.capture_sound = pygame.mixer.Sound("assets/sound/capture.wav")
+        self.castle_sound = pygame.mixer.Sound("assets/sound/castling.wav")
+
 
         # TEXT
         self.board_font = pygame.font.Font('freesansbold.ttf', 32)
@@ -114,8 +121,9 @@ class Board():
         self.next_player = BLACK
         self.black_king = None
         self.white_king = None
-        self.black_score = 39
-        self.white_score = 39
+        self.black_score = 0
+        self.white_score = 0
+        self.board_score = 0
 
         self.num_of_moves = 1 # The total amount of moves, where black and white moves are independent
         self.curr_move = 1
@@ -135,37 +143,24 @@ class Board():
         self.selection_state, self.move_state, self.promotion_state, self.ended_state = 0, 1, 2, 3
         self.board_state = self.selection_state
 
-        self.prev_piece = None
         self.selected_piece = None
         self.promotion_pawn = None
         self.promotion_color = None
 
-        self.pieces_on_board = []
+        # self.pieces_on_board = []
         self.white_pieces_on_board = []
         self.black_pieces_on_board = []
+        self.captured_pieces = []
         self.en_passant_pieces = []
-
-        # COPIES
-        '''self.grid = None
-        self.black_player.score = None
-        self.white_player.score = None
-        self.black_captured = None
-        self.white_captured = None
-        self.white_pieces_on_board = None
-        self.black_pieces_on_board = None
-        self.pieces_on_board = None'''
+        self.prev_en_passant = None
 
         self.init_pieces()
-        self.set_legal_moves(self.pieces_on_board)
+        self.set_legal_moves(WHITE, self.white_pieces_on_board, self.black_pieces_on_board)
         self.game_moves = []
+        self.prev_moves = []
     
     def show(self):
         self.win.blit(self.img, self.pos)
-
-        '''for row in range(self.rows):
-            for piece in self.grid[row]:
-                if piece: # Square in grid is not None, but a Piece object
-                    piece.show(self.y)'''
         
         for arr in self.highlighted_moves:
             square = arr[0]
@@ -175,8 +170,7 @@ class Board():
             y = pos[0] * self.square_size + self.y # The row position (also taking into account the y position of board on screen)
             self.win.blit(square, (x, y))
         
-        for piece in self.pieces_on_board:
-            piece.show(self.y)
+        self.draw_pieces()
         
         if self.board_state == self.promotion_state:
             self.win.blit(self.grey_overlay, self.pos)
@@ -194,18 +188,37 @@ class Board():
             self.win.blit(self.grey_overlay, self.pos)
             self.end_box.draw()
 
-        # Render captured pieces
-        x_offset = 10
+        # Render captured pieces (width of minimized img: 22.55)
+        white_offset = 10
+        black_offset = 10
+        img_width = 22.55
+        for piece in self.captured_pieces:
+            img, color = piece
+            if color == WHITE:
+                x = white_offset
+                y = 10
+                white_offset += img_width + 15
+            else:
+                x = black_offset
+                y = self.y + self.height + 10
+                black_offset += img_width + 15
+
+            self.win.blit(img, (x, y))
+
+        '''x_offset = 10
         for piece in self.white_captured:
             self.win.blit(piece.img, (x_offset, self.y + self.height + 10))
             x_offset += piece.img_size[0] + 15
         x_offset = 10
         for piece in self.black_captured:
             self.win.blit(piece.img, (x_offset, 10))
-            x_offset += piece.img_size[0] + 15
+            x_offset += piece.img_size[0] + 15'''
     
-    def run(self):
-        pass
+    def draw_pieces(self):
+        for row in range(self.rows):
+            for piece in self.grid[row]:
+                if piece:
+                    piece.show(self.y)
 
     
     def mouse_clicked(self, pos):
@@ -227,7 +240,8 @@ class Board():
             
             if new_square:
                 self.move_piece(self.selected_piece, new_square)
-                self.set_legal_moves(self.pieces_on_board)
+                if self.board_state != self.promotion_state:
+                    self.prepare_next_player()
             else:
                 # If the player doesn't click a valid square for the piece it means that they either deselected the piece or chose another piece.
                 # In that case, the move_state will still be true as the move_piece() function hasn't been called
@@ -236,13 +250,13 @@ class Board():
                 self.update_selected_piece(clicked_square)
         elif self.board_state == self.promotion_state:
             x, y = pos
-            promotion_square = self.promotion_pawn.get_pos()
+            prom_row, prom_col = self.promotion_pawn.get_pos()
             new_piece = None
             
             img_clicked = self.promotion_box.clicked_img(pos)
             # 0 = pawn, 1 = knight, 2 = bishop, 3 = rook, 4 = queen
             if img_clicked == 1:
-                new_piece = KNIGHTK
+                new_piece = KNIGHT
             elif img_clicked == 2:
                 new_piece = BISHOP
             elif img_clicked == 3:
@@ -251,18 +265,17 @@ class Board():
                 new_piece = QUEEN
 
             if new_piece != None: # If the piece is None, that means that promotion piece is a pawn, and in that case we don't need to change the piece
-                new_piece = self.promotion_pawn.promote_pawn(new_piece)
-                self.pieces_on_board.remove(self.promotion_pawn) # Remove pawn from pieces
+                new_piece = self.promotion_pawn.promote_pawn(new_piece, (prom_row, prom_col))
 
-                if self.player_turn == WHITE:
+                if new_piece.color == WHITE:
                     self.white_pieces_on_board.append(new_piece)
                 else:
                     self.black_pieces_on_board.append(new_piece)
             else:
                 new_piece = self.promotion_pawn
             
-            # We move the piece even though it is in the same position, to check for check and update next players move with this piece taken into account
-            self.move_piece(new_piece, promotion_square)
+            self.grid[prom_row][prom_col] = new_piece
+            self.prepare_next_player()
             
             # This is already done in move_piece
             '''
@@ -302,94 +315,19 @@ class Board():
                     square.fill(C_TRANSPARENT_RED)
 
             self.highlighted_moves.append([square, pos])  # Adding that square to the current highlighted squares, so it will be rendered to the window. We also add the position for when it get's blittet to the screen
-    
-    def move_piece_2(self, piece_obj, new_square):
-        # We want to reset checking pieces and check every move, because if a move was made that means that player avoided check if he was in check
+
+    def move_piece(self, piece, new_square, searching=False, ai_move=False): # Searching is used in minimax algorithm to look for the best move
         self.check = False
-        self.checking_pieces = []
+        sound = self.move_sound
         # CODE FOR MOVING THE PIECE
-        #print("moved piece: ", piece)
-        curr_row, curr_col = piece_obj.get_pos()
-        new_row, new_col = new_square
-
-        # Move piece in grid variable and update captured pieces
-        piece = self.grid_2[curr_row][curr_col]
-        self.grid_2[curr_row][curr_col] = None 
-        piece_at_new_square = self.grid_2[new_row][new_col]
-
-        # Handle a case of en passant
-        if piece_at_new_square and abs(piece_at_new_square) == ENPASSANT:
-            if abs(piece) != PAWN:
-                # If the piece is an en passant piece, other type of pieces besides pawns should just ignore it
-                piece_at_new_square = None
-            else:
-                if player_turn == WHITE:
-                    # If it was a white en passant pawn the pawn is above it one row
-                    piece_at_new_square = self.grid_2[new_row-1][new_col]
-                    self.grid_2[new_row-1][new_col] = None
-                else:
-                    # If black it is below 1 row
-                    piece_at_new_square = self.grid_2[new_row+1][new_col]
-                    self.grid_2[new_row+1][new_col] = None
-
-        '''if piece_at_new_square:
-            # Check to see if is a black or white piece
-            if piece_at_new_square.color == WHITE: # Black captured a piece
-                self.black_player.score += piece_at_new_square.value
-                self.white_player.enemy_score += piece_at_new_square.value
-
-                self.black_captured.append(piece_at_new_square)
-                self.white_pieces_on_board.remove(piece_at_new_square)
-            else: # White captured
-                self.white_player.score += piece_at_new_square.value
-                self.black_player.enemy_score += piece_at_new_square.value
-
-                self.white_captured.append(piece_at_new_square)
-                self.black_pieces_on_board.remove(piece_at_new_square)'''
-            
-            # Remove piece from pieces_on_board array
-            #self.pieces_on_board.remove(piece_at_new_square)
-
-        # Move piece in grid array to the new position
-        self.grid_2[new_row][new_col] = piece
-        piece_obj.set_pos((new_row, new_col))
-
-        # If the moved piece was a pawn and it moved to the final rank, we want to activate the promotion state
-        
-        end_rank = True if (self.player_turn == WHITE and new_row == 0) or (self.player_turn == BLACK and new_row == 7) else False
-        if abs(piece) == PAWN and end_rank:
-            self.grid_2[new_row][new_col] = QUEEN
-        
-        # This is to make sure that every en passant pawn gets removed after each move
-        for i in range(len(self.en_passant_pieces)-1, -1, -1):
-            pawn = self.en_passant_pieces[i]
-            pawn.update()
-        
-        # Determine all legal moves for next player
-        self.calculate_legal_moves_2((new_row, new_col))
-        legal_moves_count = len(self.legal_moves)
-
-        self.switch_turn()
-        for row in range(self.rows):
-            print(self.grid_2[row])
-        print("")
-        print("")
-        return self.grid_2
-
-    def evaluate_board(self):
-        pass
-    def move_piece(self, piece, new_square, searching=False): # Searching is used in minimax algorithm to look for the best move
-        # We want to reset checking pieces and check every move, because if a move was made that means that player avoided check if he was in check
-        if not searching:
-            self.game_moves.append((piece, new_square))
-        self.check = False
-        self.checking_pieces = []
-        # CODE FOR MOVING THE PIECE
-        #print("moved piece: ", piece)
         curr_square = piece.get_pos()
         curr_row, curr_col = curr_square
 
         new_row, new_col = new_square
+
+        # index 0 = (moved piece, curr_square), 1 = new en passant, 2 = capture piece, 3 = current en passant piece (should be readded if move gets undoed)
+        # 4 = black score, 5 = white score, 6 = castled
+        prev_move = [(piece, piece.copy_curr_state()), None, None, None, False, self.board_score]
 
         # Move piece in grid variable and update captured pieces
         self.grid[curr_row][curr_col] = None
@@ -398,15 +336,14 @@ class Board():
         # Handle a case of en passant
         if piece_at_new_square and piece_at_new_square.type == ENPASSANT:
             # Since the en passant piece is taken, it should be removed from the board. The kill method removes it from the board as well as pieces_on_board variable
-            if not searching:
-                piece_at_new_square.kill()
+            # Not important since it gets killed anyways on this move further down
 
             if piece.type != PAWN:
                 # If the piece is an en passant piece, other type of pieces besides pawns should just ignore it
                 piece_at_new_square = None
             else:
                 # If it is a pawn it can only be a pawn from the opposite side because of the way the Pawn object handles threadening moves
-
+               
                 # In this case the piece_at_new_square should be changed to the pawn that the en passant piece is referencing
                 reference_pawn = piece_at_new_square.reference_pawn
                 piece_at_new_square = reference_pawn
@@ -414,24 +351,47 @@ class Board():
                 self.grid[reference_pawn.row][reference_pawn.col] = None
 
         if piece_at_new_square:
+            if not searching:
+                sound = self.capture_sound
+                # In both cases we want to minimize the image size of the captured piece
+                #piece_at_new_square.set_minimized_size() NOT ANYMORE
+                self.captured_pieces.append((piece_at_new_square.img_minimized_size, piece_at_new_square.color))
             # Check to see if is a black or white piece
-            if piece_at_new_square.color == WHITE: # Black captured a piece
-                self.black_player.score += piece_at_new_square.value
-                self.white_player.enemy_score += piece_at_new_square.value
+            if piece.color == WHITE: # White captured a piece
+                '''self.black_player.score += piece_at_new_square.value
+                self.white_player.enemy_score += piece_at_new_square.value'''
+                #self.black_score += piece_at_new_square.value
+                self.board_score += piece_at_new_square.value
 
-                self.black_captured.append(piece_at_new_square)
+                #self.black_captured.append(piece_at_new_square)
                 #self.white_pieces_on_board.remove(piece_at_new_square)
-            else: # White captured
-                self.white_player.score += piece_at_new_square.value
-                self.black_player.enemy_score += piece_at_new_square.value
+            else: # Black captured
+                '''self.white_player.score += piece_at_new_square.value
+                self.black_player.enemy_score += piece_at_new_square.value'''
+                #self.white_score += piece_at_new_square.value
+                self.board_score -= piece_at_new_square.value
 
-                self.white_captured.append(piece_at_new_square)
+                #self.white_captured.append(piece_at_new_square)
                 #self.black_pieces_on_board.remove(piece_at_new_square)
             
-            if not searching:
-                self.pieces_on_board.remove(piece_at_new_square)
-                # In both cases we want to minimize the image size of the captured piece
-                piece_at_new_square.set_minimized_size()
+            # Update prev_move index 1 piece captured
+            prev_move[2] = (piece_at_new_square, piece_at_new_square.copy_curr_state()) # Maybe we dont need to copy because pos doesnt change, first move, available_moves
+        
+        # Removing the previous en passant piece from board if there was any 
+        prev_ep = self.prev_en_passant
+        if prev_ep:
+            prev_move[3] = prev_ep
+            self.grid[prev_ep.row][prev_ep.col] = None
+            #self.prev_en_passant.kill()
+            self.prev_en_passant = None
+
+         # This is to make sure that every en passant pawn gets removed after each move
+         # Order of operation is important here, because if a en passant pawn is killed the grid position of the en passant pawn will be set to None
+         # So if the en passant pawn was captured by the current piece, it would override that move in grid unless we kill en passant pawns before moving the capturing piece in the grid
+        '''for pawn in self.en_passant_pieces:
+            pawn.update()
+            if pawn.killed:
+                self.en_passant_pieces.remove(pawn)''' # !!!!Essential to the way i'm doing things but makes things slower i think
 
         # Move piece in grid array to the new position
         self.grid[new_row][new_col] = piece
@@ -447,91 +407,155 @@ class Board():
             if abs(new_square[0] - piece.row) > 1:
                 # Pawn moved two squares and we have to trigger an en passant piece
                 en_passant_pawn = piece.create_en_passant()
-                if not searching:
-                    self.pieces_on_board.append(en_passant_pawn)
-            elif piece.row == 0 or piece.row == 7:
+                prev_move[1] = en_passant_pawn
+                #self.en_passant_pieces.append(en_passant_pawn)
+                self.prev_en_passant = en_passant_pawn
+
+            elif new_row == 0 or new_row == 7:
                 # Pawn has reached last rank and can promote
                 self.board_state = self.promotion_state
                 self.promotion_pawn = piece
-                self.promotion_color = self.player_turn
+                self.promotion_color = piece.color
+                if searching or ai_move:
+                    # If running the minimax alg, it won't call any other functions than move_piece, so we have to promote the pawn here, so that the alg also takes into account for promotion
+                    prom_piece = piece.promote_pawn(QUEEN, new_square) # This works because we already saved the pawn piece at the beginning, so when pop function is called in minimax, the pawn will not be altered
+                    self.grid[new_row][new_col] = prom_piece
+                    if prom_piece.color == WHITE:
+                        self.white_score += 8
+                    else:
+                        self.black_score += 8
         elif piece.type == KING:
             if abs(new_square[1] - piece.col) > 1:
                 # This means that the king has moved 2 squares and is castling
                 piece.castle(new_square[1])
+                prev_move[4] = True
+                sound = self.castle_sound
+
         
         piece.move(new_square)
-        
-        # This is to make sure that every en passant pawn gets removed after each move
-        for i in range(len(self.pieces_on_board)-1, -1, -1):
-            pawn = self.pieces_on_board[i]
-            if pawn.type == ENPASSANT:
-                pawn.update()
-                if pawn.killed and not searching:
-                    self.pieces_on_board.remove(pawn)
-
-        # Update available moves and threathening variables for every piece on board
-        '''next_king = self.white_king if self.player_turn == BLACK else self.black_king
-        enemy_pieces = self.white_pieces_on_board if self.player_turn == WHITE else self.black_pieces_on_board
-        possible_move_count = 0 # Used to check for stalemate
-        for piece in self.pieces_on_board:
-            piece.reset_moves()
-            piece.check = False # Reset if piece was previously giving a check
-            #piece.update_and_add_available_moves()
-            if piece.color != self.player_turn: # Meaning that it is a piece from the next player
-                # This is code for making sure that player is able to do a move that would put them in check
-                piece.update_available_moves()
-                for move in piece.possible_moves:
-                    causes_check = self.hypothetic_move(piece, enemy_pieces, move, next_king)
-                    if not causes_check:
-                        piece.add_available_move(move)
-                        possible_move_count += 1
-            else:
-                piece.update_and_add_available_moves()
-
-            if piece.check:
-                self.check = True
-                self.checking_pieces.append(piece)'''
 
         # This is to check if current piece is giving a check
-        piece.reset_moves()
-        piece.update_and_add_available_moves()
-        self.prev_piece = piece
-        if self.player_turn == WHITE:
+        # DO WE REALLY NEED TO UPDATE MOVES HERE?? MAYBE IT'S ALL DONE IN SET LEGAL MOVES
+        '''piece.reset_moves()
+        piece.update_and_add_available_moves() #TESTING THE NEW UPDATE FUNCTION'''
+
+        # For minimax_v1
+        '''if self.player_turn == WHITE:
             self.black_player.enemy_threathening_amt += len(piece.threathening)
         else:
             self.black_player.threathening_amt += len(piece.threathening)
         if piece.check:
-            self.check = True
-
-                #self.calculate_checkmate() # MAYBE THIS FUNCTION IS IRRELEVANT BECAUSE THERE ARE NO POSSIBLE MOVES LEFT??
-                # WE NEED TO REMOVE THE SELF.CHECK NOW
-                # MAYBE THAT IS WHAT IS CAUSING PIECES NOT TO MAKE MOVES THAT WOULD PUT THE KING IN CHECK????
-        if self.board_state != self.promotion_state:
-            self.switch_turn()
+            self.check = True'''
         
-        #self.set_legal_moves()
+        # Now we add this move to the list of previous moves
+        self.prev_moves.append(prev_move)
+
+        if not searching:
+            play_sound(sound)
     
-    def set_legal_moves(self, pieces):
-        # Check if pieces for castling are empty
-        if self.prev_piece:
-            for move in self.prev_piece.available_moves:
-                if self.player_turn == WHITE:
-                    if move in self.q_side_white_castling_squares:
-                        self.white_king.q_castling_safe = False
+    # Function to undo move and reset board grid to previous state
+    # Doesn't work with castling right now
+    def pop(self, searching=False):
+        if len(self.prev_moves) < 1:
+            return False
+        prev_move = self.prev_moves.pop()
 
-                    if move in self.k_side_white_castling_squares:
-                        self.white_king.k_castling_safe = False
-                    
-                else: # BLACK PLAYER TURN
-                    if move in self.q_side_black_castling_squares:
-                        self.black_king.q_castling_safe = False
+        moved_piece = prev_move[0][0]
+        curr_row, curr_col = moved_piece.get_pos()
+        prev_col = prev_move[0][1][0][1] # Previous col position of the piece
 
-                    if move in self.k_side_black_castling_squares:
-                        self.black_king.k_castling_safe = False
+        # Checking for castling
+        if moved_piece.type == KING and prev_move[4]: # prev_move[4] is True if player castled
+            moved_piece.castled = False
+            moved_piece.undo_castle()
+        else:
+            moved_piece.revert_from_copy(prev_move[0][1])
+            self.grid[moved_piece.row][moved_piece.col] = moved_piece
 
+        en_passant_pawn = prev_move[1]
+        if en_passant_pawn:
+            # Newly created en passant piece
+            self.grid[en_passant_pawn.row][en_passant_pawn.col] = None # It shouldn't be there anymore
+            self.prev_en_passant = None
 
+        if prev_move[2]:
+            # Piece captured
+            captured_piece = prev_move[2][0]
+            captured_piece.revert_from_copy(prev_move[2][1])
+            self.grid[captured_piece.row][captured_piece.col] = captured_piece
+        else:
+            # If no piece was captured we will set that square to None
+            self.grid[curr_row][curr_col] = None
+            # If it was an en passant piece, it will still get readded below
+
+        en_passant_pawn = prev_move[3]
+        if en_passant_pawn:
+            # En passant piece already present at move (should be added again)
+            self.grid[en_passant_pawn.row][en_passant_pawn.col] = en_passant_pawn
+            # We should revert move_count of en passant pawn so that it still gets killed in next move as it should
+            #en_passant_pawn.move_count = 1
+            #self.en_passant_pieces.append(en_passant_pawn)
+            self.prev_en_passant = en_passant_pawn
+        
+        if not searching:
+            # Switch turn is not relevant for when we are going through minimax, 
+            self.prepare_next_player()
+            # Update available moves for the pieces
+            if prev_move[2]:
+                captured_piece.update_and_add_available_moves()
+                #captured_piece.update_available_moves()
+                self.captured_pieces.pop() # Remove a captured piece so it isn't displayed as captured on board
+        
+        #self.black_score = prev_move[4]
+        #self.white_score = prev_move[5]
+        self.board_score = prev_move[5]
+
+    
+    # Function that is called after each final decided move is made, which switches turn as well as updates all legal moves for next player
+    # This will not be called in minimax function since it messes with player turn and calculates all legal moves, which is not necessary, and slow
+    def prepare_next_player(self):
+        self.switch_turn()
+        player_pieces, enemy_pieces = self.get_pieces_on_board(self.player_turn) # Get all pieces on board for the next player
+        self.set_legal_moves(self.player_turn, player_pieces, enemy_pieces)
+        if self.board_state != self.ended_state:
+            self.board_state = self.selection_state
+
+    def evaluate_board(self, player_color, legal_moves=None):
+        if legal_moves == None:
+            legal_moves = self.legal_moves
+        if len(legal_moves) == 0:
+            self.board_state = self.ended_state
+
+            if not self.check:
+                self.result = self.stalemate
+                self.white_player.score = 0
+                self.black_player.score = 0
+            elif self.check and self.game_state != EXPERIMENTAL:
+                print("Calculating checkmate...")
+                self.result = self.checkmate
+                if player_color == WHITE:
+                    self.black_player.score = 999
+                else:
+                    self.white_player.score = 999
+        else:
+            score = 0
+            for row in range(self.rows):
+                for piece in self.grid[row]:
+                    if piece and piece.type != ENPASSANT:
+                        if piece.color == player_color:
+                            piece.update_available_moves()
+                            threathening_amt = len(piece.threathening)
+                            score += threathening_amt * 0.1
+                            score += piece.value
+                        else:
+                            score -= piece.value
+            return score
+        
+
+    
+    def set_legal_moves(self, player_color, pieces, enemy_pieces):
         # Determine all legal moves for next player
-        self.calculate_legal_moves(self.player_turn, pieces)
+        moves = self.calculate_legal_moves(player_color, pieces, enemy_pieces)
         legal_moves_count = len(self.legal_moves)
 
         # Check for stalemate if player is not in check
@@ -543,12 +567,148 @@ class Board():
             elif self.check and self.game_state != EXPERIMENTAL:
                 print("Calculating checkmate...")
                 self.result = self.checkmate
-                if self.player_turn == WHITE:
-                    self.black_player.score = 99999999
+                if player_color == WHITE:
+                    self.black_player.score = 999
                 else:
-                    self.white_player.score = 99999999
-
+                    self.white_player.score = 999
             self.handle_game_finished()
+
+        return moves
+    
+    # Get all legal moves for next player
+    def get_legal_moves(self, player_color):
+        moves = []
+        player_pieces = []
+        enemy_pieces = []
+
+        # First we sort all the player pieces and the enemy pieces on the board
+        # MAYBE WE CAN DO THIS WHILE MAKING MOVES, SO WE HAVE A MEMBER VARIABLE WITH WHITE PIECES AND BLACK PIECES
+        for row in range(self.rows):
+            for piece in self.grid[row]:
+                if piece != None:
+                    if piece.color == player_color:
+                        player_pieces.append(piece)
+                    else: # If piece is the enemy color
+                        enemy_pieces.append(piece)
+        
+        # We get the current player's king which is used below
+        if player_color == WHITE:
+            player_king = self.white_king
+        else:
+            player_king = self.black_king
+
+        # Looping through each piece and finding all the legal moves for the piece
+        for piece in player_pieces:
+            piece.reset_moves()
+            piece.update_available_moves()
+
+            # Going through each move and checking if it would put the player in check, meaning that it is an illegal move
+            for move in piece.possible_moves:
+                # hypothetic_move finds out if the move will put the current players king in check, which would be an illegal move for the player
+                # If this move is a castling move from the king, we will check if the castling move is legal by looking at the enemy pieces and seeing if they target one of the castling squares
+                if piece == player_king and abs(move[1] - piece.col) > 1: # Checking if king has moved more than 1 column, meaning that it is a castling move
+                    castling_legal = piece.castling_legal(move[1], enemy_pieces)
+                    if castling_legal:
+                        moves.append((piece, move))
+                        piece.available_moves.append(move)
+                else:
+                    causes_check = self.hypothetic_move(piece, move, player_king, enemy_pieces)
+                    if not causes_check:
+                        moves.append((piece, move))
+                        piece.available_moves.append(move)
+            
+        return moves
+
+    #@profile 
+    def calculate_legal_moves(self, player_color, pieces, enemy_pieces):
+        self.legal_moves = []
+        if player_color == WHITE:
+            player_king = self.white_king
+        else:
+            player_king = self.black_king
+
+        legal_moves_count = 0 # Used to check for stalemate and check
+        for piece in pieces:
+                piece.reset_moves()
+                piece.update_available_moves()
+
+                # Going through each move and checking if it would put the player in check, meaning that it is an illegal move
+                for move in piece.possible_moves:
+                    # hypothetic_move finds out if the move will put the current players king in check, which would be an illegal move for the player
+                    # If this move is a castling move from the king, we will check if the castling move is legal by looking at the enemy pieces and seeing if they target one of the castling squares
+                    if piece == player_king and abs(move[1] - piece.col) > 1: # Checking if king has moved more than 1 column, meaning that it is a castling move
+                        castling_legal = piece.castling_legal(move[1], enemy_pieces)
+                        if castling_legal:
+                            self.legal_moves.append((piece, move))
+                            piece.available_moves.append(move)
+                            legal_moves_count += 1
+                    else:
+                        causes_check = self.hypothetic_move(piece, move, player_king, enemy_pieces)
+                        if not causes_check:
+                            self.legal_moves.append((piece, move))
+                            piece.available_moves.append(move)
+                            legal_moves_count += 1
+                
+                # If this piece is the king we want to check 
+    
+  
+        # Finally we have to update each pie
+    def hypothetic_move(self, move_piece, new_square, king, enemy_pieces):
+        # Check pieces is an array of pieces for which we want to check if they give check after the move is made
+        causes_check = False # We set it to false by default
+        curr_square = move_piece.get_pos()
+        curr_row, curr_col = curr_square
+
+        new_row, new_col = new_square
+
+        self.grid[curr_row][curr_col] = None 
+        piece_at_new_square = self.grid[new_row][new_col]
+
+        # COPIES
+        original_piece_at_new_square = piece_at_new_square
+        original_reference_pawn = None
+
+        # CHECK IF I HAVE DONE THIS PART CORRECTLY MICKI!!!
+        if piece_at_new_square and piece_at_new_square.type == ENPASSANT:
+            if move_piece.type != PAWN:
+                piece_at_new_square = None
+            else:
+                reference_pawn = piece_at_new_square.reference_pawn
+                piece_at_new_square = reference_pawn
+                original_reference_pawn = reference_pawn
+                self.grid[reference_pawn.row][reference_pawn.col] = None
+
+        # Move piece in grid array to the new position
+        self.grid[new_row][new_col] = move_piece
+        move_piece.set_pos((new_row, new_col)) # Maybe this is not necesarry!!!
+
+
+        for piece in enemy_pieces: # THIS IS THE PROBLEM, PIECES_ON_BOARD IS NOT UPDATED IN MINIMAX. THE BISHOP STILL CAUSES CHECK EVEN THOUGH IT WAS TAKEN BY THE PAWN
+            # Reset
+            if piece.get_pos() == (new_row, new_col) or piece.color == king.color: # We only want the pieces from enemy color
+                continue
+
+            piece.reset_moves()
+            #piece.update_and_add_available_moves() #The new update_available_moves() function adds available moves already so we don't need to update and add
+            piece.update_available_moves(add_to_available_moves=True)
+
+            # Check if the piece is giving check
+            if piece.check:
+                causes_check = True
+                break
+                # OBS: if the move captures the piece we are checking, then piece.is_threathening will be false since it can't threathen itself
+
+        # REVERTING CHANGES
+        self.grid[curr_row][curr_col] = move_piece
+        move_piece.set_pos((curr_row, curr_col))
+        self.grid[new_row][new_col] = original_piece_at_new_square
+        if original_reference_pawn:
+            self.grid[original_reference_pawn.row][original_reference_pawn.col] = original_reference_pawn
+        # Moves the piece on board
+        # BE SURE YOU ARE NOT MESSING WITH EN PASSANT MICKI!!!
+        #piece.move(curr_square)
+
+        return causes_check
     
     def make_move(self, move):
         possible_pieces = ['N', 'B', 'R', 'Q', 'K']
@@ -619,237 +779,6 @@ class Board():
         
         # Now we can finally make the move on board
         self.move_piece(piece, square)
-
-    def calculate_legal_moves(self, player, pieces):
-        self.legal_moves = []
-        if player == WHITE:
-            player_king = self.white_king
-        else:
-            player_king = self.black_king
-
-        legal_moves_count = 0 # Used to check for stalemate and check
-        for piece in pieces:
-            if piece.color == player:
-                piece.reset_moves()
-
-                piece.update_available_moves()
-                # Going through each move and checking if it would put the player in check, meaning that it is an illegal move
-                for move in piece.possible_moves:
-                    causes_check = self.hypothetic_move(piece, move, player_king)
-                    if not causes_check:
-                        self.legal_moves.append((piece, move))
-                        piece.add_available_move(move)
-                        legal_moves_count += 1
-                
-                # If this piece is the king we want to check 
-    
-    def copy(self, with_captured=False):
-        copy = [] # index 0 = grid
-        grid_copy = []
-        for row in range(self.rows):
-            grid_copy.append([])
-            for col in range(self.cols):
-                piece = self.grid[row][col]
-                # We will also pass a copy of the state of that piece
-                piece_copy = piece.copy_curr_state() if piece != None else None
-                grid_copy[row].append((piece, piece_copy))
-
-        copy.append(grid_copy)
-        copy.append(self.black_player.score)
-        copy.append(self.white_player.score)
-        # We copy the pieces on board by getting their positions from grid
-        #for piece in self.pieces_on_board
-        #copy.append(self.pieces_on_board.copy())
-        copy.append(self.player_turn)
-        copy.append(self.next_player)
-        if with_captured:
-            copy.append(self.white_captured.copy())
-            copy.append(self.black_captured.copy())
-
-        return copy
-
-    def revert_from_copy(self, copy, with_captured=False):
-        grid = copy[0]
-        for row in range(self.rows):
-            for col in range(self.cols):
-                # We check if the piece is at the same position as before, if not we put it there
-                curr_piece = self.grid[row][col]
-                prev_piece = grid[row][col][0] # Index 0 is the Piece object
-                if curr_piece != prev_piece:
-                    self.grid[row][col] = prev_piece
-
-                # We also have to move the piece's physical position by using set_pos() which just moves the piece and doesn't calculate other stuff like move_piece()
-                # Since the previous piece has moved, that is the one we want to set position of
-                if prev_piece != None:
-                    # We only want to change the position if there actually was a piece at the square
-                    prev_piece.revert_from_copy(grid[row][col][1]) # Index 1 is the copy of the piece state
-        #self.grid = copy[0]
-        self.black_player.score = copy[1]
-        self.white_player.score = copy[2]
-
-        # Set all pieces in pieces_on_board to the pieces from the copy
-        '''white_pieces_on_board_copy = copy[3]
-        for i, piece in enumerate(white_pieces_on_board_copy):
-            if i < len(self.white_pieces_on_board):
-                if self.white_pieces_on_board[i] != piece:
-                    self.white_pieces_on_board[i] = piece
-            else:
-                # Meaning that a piece was delted from the current white_pieces_on_board
-                # We have to readd that piece
-                self.white_pieces_on_board.append(piece)
-        
-        black_pieces_on_board_copy = copy[4]
-        for i, piece in enumerate(black_pieces_on_board_copy):
-            if i < len(self.black_pieces_on_board):
-                if self.black_pieces_on_board[i] != piece:
-                    self.black_pieces_on_board[i] = piece
-            else:
-                # Meaning that a piece was delted from the current white_pieces_on_board
-                # We have to readd that piece
-                self.black_pieces_on_board.append(piece)'''
-        
-        '''pieces_on_board_copy = copy[3]
-        self.pieces_on_board.clear()
-        for piece in pieces_on_board_copy:
-            self.pieces_on_board.append(piece)'''
-
-        self.player_turn = copy[3]
-        self.next_player = copy[4]
-        if with_captured:
-            self.white_captured = copy[5]
-            self.black_captured = copy[6]
-
-        # Finally we have to update each pie
-    def hypothetic_move(self, move_piece, new_square, king):
-        # Check pieces is an array of pieces for which we want to check if they give check after the move is made
-        causes_check = False # We set it to false by default
-        curr_square = move_piece.get_pos()
-        curr_row, curr_col = curr_square
-
-        new_row, new_col = new_square
-
-        self.grid[curr_row][curr_col] = None 
-        piece_at_new_square = self.grid[new_row][new_col]
-
-        # COPIES
-        original_piece_at_new_square = piece_at_new_square
-        original_reference_pawn = None
-
-        # CHECK IF I HAVE DONE THIS PART CORRECTLY MICKI!!!
-        if piece_at_new_square and piece_at_new_square.type == ENPASSANT:
-            if move_piece.type != PAWN:
-                piece_at_new_square = None
-            else:
-                reference_pawn = piece_at_new_square.reference_pawn
-                piece_at_new_square = reference_pawn
-                original_reference_pawn = reference_pawn
-                self.grid[reference_pawn.row][reference_pawn.col] = None
-
-        # Move piece in grid array to the new position
-        self.grid[new_row][new_col] = move_piece
-        move_piece.set_pos((new_row, new_col))
-
-
-        for piece in self.pieces_on_board:
-            # Reset
-            if piece.get_pos() == (new_row, new_col) or piece.color == king.color: # We only want the pieces from enemy color
-                continue
-
-            piece.reset_moves()
-            piece.update_and_add_available_moves()
-
-            # Check if the piece is giving check
-            if piece.check:
-                causes_check = True
-                break
-                # OBS: if the move captures the piece we are checking, then piece.is_threathening will be false since it can't threathen itself
-
-        # REVERTING CHANGES
-        self.grid[curr_row][curr_col] = move_piece
-        move_piece.set_pos((curr_row, curr_col))
-        self.grid[new_row][new_col] = original_piece_at_new_square
-        if original_reference_pawn:
-            self.grid[original_reference_pawn.row][original_reference_pawn.col] = original_reference_pawn
-        # Moves the piece on board
-        # BE SURE YOU ARE NOT MESSING WITH EN PASSANT MICKI!!!
-        #piece.move(curr_square)
-
-        return causes_check
-
-    def calculate_legal_moves_2(self, enemy_move):
-        self.legal_moves = []
-        if self.next_player == WHITE:
-            player_pieces = self.white_pieces_on_board
-            enemy_pieces = self.black_pieces_on_board
-        else:
-            player_pieces = self.black_pieces_on_board
-            enemy_pieces = self.white_pieces_on_board
-
-        legal_moves_count = 0 # Used to check for stalemate and check
-        for i in range(len(player_pieces)-1, -1, -1):
-            piece = player_pieces[i]
-            if piece.get_pos() == enemy_move:
-                player_pieces.pop(i)
-                continue
-
-            piece.reset_moves()
-            piece.check = False # Reset if piece was previously giving a check
-
-            possible_moves = piece.update_available_moves_2(self.grid_2)
-            # Going through each move and checking if it would put the player in check, meaning that it is an illegal move
-            for move in possible_moves:
-                causes_check = self.hypothetic_move_2(piece, enemy_pieces, move)
-                if not causes_check:
-                    self.legal_moves.append((piece, move))
-                    piece.add_available_move(move)
-                    legal_moves_count += 1
-            
-            if piece.check:
-                self.check = True
-
-    def hypothetic_move_2(self, move_piece, check_pieces, new_square):
-        # Check pieces is an array of pieces for which we want to check if they give check after the move is made
-        causes_check = False # We set it to false by default
-        curr_square = move_piece.get_pos()
-        curr_row, curr_col = curr_square
-
-        new_row, new_col = new_square
-
-        prev_piece_at_curr_square = self.grid_2[curr_row][curr_col]
-        self.grid_2[curr_row][curr_col] = None 
-        piece_at_new_square = self.grid_2[new_row][new_col]
-
-        # COPIES
-        original_piece_at_new_square = piece_at_new_square
-        original_reference_pawn = None
-
-        # CHECK IF I HAVE DONE THIS PART CORRECTLY MICKI!!!
-        if piece_at_new_square and abs(piece_at_new_square) == ENPASSANT and move_piece.type == PAWN:
-            if player_turn == WHITE:
-                # If it was a white en passant pawn the pawn is above it one row
-                piece_at_new_square = self.grid_2[new_row-1][new_col]
-                self.grid_2[new_row-1][new_col] = None
-            else:
-                # If black it is below 1 row
-                piece_at_new_square = self.grid_2[new_row+1][new_col]
-                self.grid_2[new_row+1][new_col] = None
-
-        # Move piece in grid array to the new position
-        self.grid_2[new_row][new_col] = move_piece.type if self.next_player == WHITE else - move_piece.type
-
-        for piece in check_pieces:
-            piece.minimax_update_and_add_moves(self.grid_2)
-
-            # Check if the piece is giving check
-            if piece.check:
-                causes_check = True
-                break
-
-        # REVERTING CHANGES
-        self.grid_2[curr_row][curr_col] = prev_piece_at_curr_square
-        self.grid_2[new_row][new_col] = original_piece_at_new_square
-
-        return causes_check
     
     def handle_game_finished(self):
         if self.result == self.stalemate:
@@ -868,14 +797,24 @@ class Board():
         self.board_state = self.ended_state
         print(self.game_moves)
     
-    def get_pieces_on_board(self):
-        pieces_on_board = []
+    # By defualt it return both player pieces and enemy pieces
+    def get_pieces_on_board(self, player_color, player_pieces=True, enemy_pieces=True):
+        player = []
+        enemy = []
         for row in range(self.rows):
             for piece in self.grid[row]:
-                if piece != None:
-                    pieces_on_board.append(piece)
+                if piece != None and piece.type != ENPASSANT:
+                    if piece.color == player_color and player_pieces:
+                        player.append(piece)
+                    elif piece.color != player_color and enemy_pieces: # If piece is the enemy color and both_players is true, we add the piece to enemy_pieces
+                        enemy.append(piece)
         
-        return pieces_on_board
+        if player_pieces and enemy_pieces:
+            return player, enemy
+        elif player_pieces:
+            return player
+        else:
+            return enemy
 
     # Function to get piece from grid from a given position (uses the get_square function)
     def get_piece(self, square):
@@ -894,14 +833,13 @@ class Board():
     
     def switch_turn(self):
         self.num_of_moves += 1
+        self.player_turn = self.next_player
 
         if self.player_turn == WHITE:
-            self.player_turn = BLACK
-            self.next_player = WHITE
-        else:
-            self.player_turn = WHITE
-            self.next_player = BLACK
             self.curr_move += 1 # Everytime it's white's turn, that means that it's a new move
+            self.next_player = BLACK
+        else:
+            self.next_player = WHITE
 
     def init_pieces(self):
         # BLACK PIECES
@@ -909,18 +847,18 @@ class Board():
         knight = Knight(self.win, BOARD_POSITIONS['b8'], BLACK, self.grid, self.square_size)
         bishop = Bishop(self.win, BOARD_POSITIONS['c8'], BLACK, self.grid, self.square_size)
         queen = Queen(self.win, BOARD_POSITIONS['d8'], BLACK, self.grid, self.square_size)
-        self.black_king = King(self.win, BOARD_POSITIONS['e8'], BLACK, self.grid, self.square_size, self.pieces_on_board)
         self.grid[0][0] = rook
         self.grid[0][1] = knight
         self.grid[0][2] = bishop
         self.grid[0][3] = queen
-        self.grid[0][4] = self.black_king
         self.grid[0][5] = Bishop(self.win, BOARD_POSITIONS['f8'], BLACK, self.grid, self.square_size)
         self.grid[0][6] = Knight(self.win, BOARD_POSITIONS['g8'], BLACK, self.grid, self.square_size)
         self.grid[0][7] = Rook(self.win, BOARD_POSITIONS['h8'], BLACK, self.grid, self.square_size)
+        self.black_king = King(self.win, BOARD_POSITIONS['e8'], BLACK, self.grid, self.square_size) # Needs to be created after the rook, as it gets referenced in __init__
+        self.grid[0][4] = self.black_king
         # BLACK PAWNS
         for i in range(8):
-            self.grid[1][i] = Pawn(self.win, (1, i), BLACK, self.grid, self.square_size, self.pieces_on_board, self.en_passant_pieces)
+            self.grid[1][i] = Pawn(self.win, (1, i), BLACK, self.grid, self.square_size, self.en_passant_pieces)
             self.grid_2[1][i] = B_PAWN
         
         # Saving the images for the black pieces so they can be displayed when player needs to choose a piece for pawn promotion
@@ -932,18 +870,18 @@ class Board():
         knight = Knight(self.win, BOARD_POSITIONS['b1'], WHITE, self.grid, self.square_size)
         bishop = Bishop(self.win, BOARD_POSITIONS['c1'], WHITE, self.grid, self.square_size)
         queen = Queen(self.win, BOARD_POSITIONS['d1'], WHITE, self.grid, self.square_size)
-        self.white_king = King(self.win, BOARD_POSITIONS['e1'], WHITE, self.grid, self.square_size, self.pieces_on_board)
         self.grid[7][0] = rook
         self.grid[7][1] = knight
         self.grid[7][2] = bishop
         self.grid[7][3] = queen
-        self.grid[7][4] = self.white_king
         self.grid[7][5] = Bishop(self.win, BOARD_POSITIONS['f1'], WHITE, self.grid, self.square_size)
         self.grid[7][6] = Knight(self.win, BOARD_POSITIONS['g1'], WHITE, self.grid, self.square_size)
         self.grid[7][7] = Rook(self.win, BOARD_POSITIONS['h1'], WHITE, self.grid, self.square_size)
+        self.white_king = King(self.win, BOARD_POSITIONS['e1'], WHITE, self.grid, self.square_size) # Needs to be created after the rook, as it gets referenced in __init__
+        self.grid[7][4] = self.white_king
         # WHITE PAWNS
         for i in range(8):
-            self.grid[6][i] = Pawn(self.win, (6, i), WHITE, self.grid, self.square_size, self.pieces_on_board, self.en_passant_pieces)
+            self.grid[6][i] = Pawn(self.win, (6, i), WHITE, self.grid, self.square_size, self.en_passant_pieces)
             self.grid_2[6][i] = W_PAWN
         
         # Saving the images for the white pieces so they can be displayed when player needs to choose a piece for pawn promotion
@@ -956,9 +894,9 @@ class Board():
                 if piece != None:
                     piece.reset_moves()
                     piece.update_and_add_available_moves()
+                    #piece.update_available_moves()
 
                     # Add piece to an array that contains all the pieces, so we can easily loop through them if needed
-                    self.pieces_on_board.append(piece)
                     if piece.color == WHITE:
                         self.white_pieces_on_board.append(piece)
                     else:
@@ -990,35 +928,3 @@ class Board():
             self.turn_based = False
             self.highlight = True
     
-       
-    # Previous functions to calculate checkmate
-'''
-    def calculate_checkmate(self):
-        self.checked_king = self.white_king if self.player_turn == BLACK else self.black_king # Color of player that made current move caused check
-        total_legal_moves = 0
-
-        for piece in self.pieces_on_board:
-            if piece.color == self.checked_king.color:
-                # If it's of the pieces from the player in check
-                moves = self.legal_moves_in_check(piece)
-                total_legal_moves += len(moves)
-                piece.available_moves = moves
-        
-        if total_legal_moves == 0:
-            print("CHECKMATE!")
-            self.result = self.checkmate
-            self.handle_game_finished()
-    
-    def legal_moves_in_check(self, piece):
-        moves = []
-        for checking_piece in self.checking_pieces:
-            # Looping through all the pieces that are giving check
-            for move in piece.available_moves:
-                # Looping through each move of a given piece from player in check to check if it can stop it
-                if move == checking_piece.get_pos():
-                    moves.append(move)
-                else:
-                    still_check = self.hypothetic_move(piece, [checking_piece], move, self.checked_king)
-                    if not still_check:
-                        moves.append(move)
-        return moves'''

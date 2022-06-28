@@ -10,15 +10,11 @@ class Rook(Piece):
         self.value = 5
     
     # ALSO UPDATES THREATHENING VARIABLE
-    def update_available_moves(self):
-        moves = self.check_moves_straight()
+    def update_available_moves(self, add_to_available_moves=False):
+        '''moves = self.check_moves_straight()
         
-        self.possible_moves = moves
-    
-    def update_available_moves_2(self, board=None):
-        moves = self.check_moves_straight_2(board=board)
-        
-        return moves
+        self.possible_moves = moves'''
+        self.update_straight_moves(add_to_available_moves)
 
     
 
