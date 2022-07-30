@@ -35,8 +35,8 @@ class Game():
         self.board_x, self.board_y = 0, (self.height - self.board_height) / 2
         self.board = Board(self.win, (self.board_x, self.board_y), (self.board_width, self.board_height), NORMAL)
 
-        self.player_white = Player(WHITE, self.board, ai=True, ai_level=3, depth=3)
-        self.player_black = Player(BLACK, self.board, ai=False, ai_level=3, depth=3)
+        self.player_white = Player(WHITE, self.board, ai=False, ai_level=3, depth=1)
+        self.player_black = Player(BLACK, self.board, ai=True, ai_level=3, depth=3)
         self.board.white_player = self.player_white
         self.board.black_player = self.player_black
 
